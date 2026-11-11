@@ -3,6 +3,9 @@
 A printable take on the Craighill Metrolog Ruler, the aluminum ruler whose
 telescoping neck turns it into a caliper.
 
+A sturdier original design, with inch and centimetre scales, is in
+[`sturdy/`](sturdy/README.md). The files below are the thinner Printables model.
+
 ## Source
 
 - Model: [Precision Metric Sliding Ruler - Metrolog Inspired](https://www.printables.com/model/1736604-precision-metric-sliding-ruler-metrolog-inspired)

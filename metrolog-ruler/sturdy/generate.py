@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Sturdy sliding caliper-ruler, an original design in the spirit of the Craighill Metrolog.
 
-Generates two STL files (both print flat, scale side up, no supports):
-  sturdy_ruler_body.stl    34 x 200 x 12 mm bar with a dovetail channel
+Generates four STL files (all print flat, scale side up, no supports):
+  sturdy_ruler_body.stl    36 x 200 x 12 mm bar with a dovetail channel
   sturdy_ruler_slider.stl  head (jaw) and dovetail rail in one piece, 226 mm long
+  fit_test_body.stl        top 62 mm of the body, for a quick fit check
+  fit_test_rail.stl        tail 68 mm of the rail, for a quick fit check
 
 Requires: pip install manifold3d numpy matplotlib
 Usage:    python3 generate.py [output_dir]
@@ -19,19 +21,21 @@ from matplotlib.font_manager import FontProperties
 from matplotlib.textpath import TextPath
 
 # ---------------------------------------------------------------- parameters
-W = 34.0            # overall width
+W = 36.0            # overall width
 T = 12.0            # body thickness
 LB = 200.0          # body length
 FLOOR = 4.0         # body material under the channel
 HEAD_L = 30.0       # head length
 HEAD_R = 15.0       # big head corner radius (30 mm circle template)
 RAIL_L = 196.0      # rail length below the jaw face
-RAIL_H = 7.75       # rail and head thickness
 RAIL_TOP = 14.0     # rail width at the top face
 RAIL_BASE = 20.0    # rail width at the dovetail base
 BASE_H = 1.0        # height of the vertical part of the dovetail base
-SIDE_GAP = 0.2      # clearance each side of the rail's top section
-TAPER_GAP = 0.25    # clearance on the 45 degree dovetail faces
+SIDE_GAP = 0.4      # clearance each side of the rail's top section
+TAPER_GAP = 0.5     # clearance on the 45 degree dovetail faces
+RAIL_H = T - FLOOR - TAPER_GAP   # rail and head thickness (flush when sprung up)
+GUIDE_L = 55.0      # only this length at the jaw end guides the rail
+RELIEF_GAP = 0.8    # extra clearance in the rest of the channel (tolerates bowing)
 TRAVEL = 148.0      # jaw opening at the end stop
 
 # Spring tongue in the body floor: end stop plus sliding friction.
@@ -39,14 +43,16 @@ TONGUE_W = 8.0
 TONGUE_ROOT = LB - 4.0      # y of the fixed end
 BUMP_FACE = LB - 39.0       # y of the bump's vertical stop face
 BUMP_W = 6.0
-BUMP_TOP = 2.05             # bump height above the channel floor
+BUMP_TOP = 2.1              # bump height above the channel floor
 SLOT = 1.0                  # width of the U-slot around the tongue
 RELIEF = 0.6                # recess under the tongue so it never touches the desk
 GROOVE_W = 7.0              # groove under the rail that the bump runs in
-GROOVE_D = 1.4
+GROOVE_D = 1.2
 
-ENGRAVE = 0.6       # depth of ticks and numbers
-TICK_W = 0.45
+ENGRAVE = 0.4       # depth of scale marks and numbers (two 0.2 mm layers)
+BAND_L = 2.2        # length of the alternating unit bands at the edge
+MARK_W = 0.8        # width of the longer marks behind the bands
+TEXT_H = 3.6
 SCALE_Y0 = 5.0      # y of the zero mark of both body scales
 EPS = 0.01
 
@@ -113,10 +119,28 @@ def engraving(rects, texts, z_top):
     return cs.extrude(ENGRAVE + 1).translate([0, 0, z_top - ENGRAVE])
 
 
-def tick(x_edge, length, y):
-    """Tick starting at the outer edge x_edge and running towards the centre."""
-    x_in = x_edge - np.sign(x_edge) * length
-    return rect(min(x_edge, x_in), max(x_edge, x_in), y - TICK_W / 2, y + TICK_W / 2)
+def edge_rect(x_edge, d0, d1, y0, y1):
+    """Rectangle between distances d0 and d1 inward from the edge x_edge."""
+    sgn = np.sign(x_edge)
+    xa, xb = x_edge - sgn * d0, x_edge - sgn * d1
+    return rect(min(xa, xb), max(xa, xb), min(y0, y1), max(y0, y1))
+
+
+def scale_marks(x_edge, y0, unit, count, direction, major):
+    """Printable scale: every other unit is a recessed band, so each band edge
+    is one unit. `major` maps a divisor to the length of a longer mark."""
+    rects = []
+    for i in range(0, count, 2):
+        rects.append(edge_rect(x_edge, -1.0, BAND_L, y0 + direction * i * unit,
+                               y0 + direction * (i + 1) * unit))
+    for i in range(0, count + 1):
+        for div, length in major:
+            if i % div == 0:
+                y = y0 + direction * i * unit
+                rects.append(edge_rect(x_edge, BAND_L - 0.2, BAND_L + length,
+                                       y - MARK_W / 2, y + MARK_W / 2))
+                break
+    return rects
 
 
 # --------------------------------------------------------------------- body
@@ -131,6 +155,12 @@ def make_body():
     profile = [(-hb, FLOOR), (hb, FLOOR), (hb, z1), (ht, z2), (ht, T + 1),
                (-ht, T + 1), (-ht, z2), (-hb, z1)]
     body -= prism_y(profile, LB - RAIL_L - 0.5, LB + 1)
+    # Outside the guide zone the channel is wider and deeper, so a slightly
+    # bowed print cannot pinch the rail.
+    r = RELIEF_GAP
+    relief = [(-hb - r, FLOOR - 0.4), (hb + r, FLOOR - 0.4), (hb + r, z1), (ht + r, z2),
+              (ht + r, T + 1), (-ht - r, T + 1), (-ht - r, z2), (-hb - r, z1)]
+    body -= prism_y(relief, LB - RAIL_L - 0.5, LB - GUIDE_L)
 
     # Spring tongue: U-slot through the floor, relief pocket underneath.
     tip = BUMP_FACE - 2.0
@@ -147,22 +177,18 @@ def make_body():
                    -BUMP_W / 2, BUMP_W / 2)
     body += bump
 
-    # Scales: millimetres on the left edge, inches on the right edge.
-    rects, texts = [], []
-    for i in range(0, 191):
-        length = 5.5 if i % 10 == 0 else 4.2 if i % 5 == 0 else 2.8
-        rects.append(tick(-W / 2, length, SCALE_Y0 + i))
-        if i % 10 == 0:
-            label, h = (str(i // 10), 3.0) if i else ("cm", 2.4)
-            texts += text_contours(label, h, -W / 2 + 7.6, SCALE_Y0 + i)
-    for i in range(0, 121):                 # sixteenths up to 7.5 in
-        length = (5.5 if i % 16 == 0 else 4.6 if i % 8 == 0 else 3.7 if i % 4 == 0
-                  else 2.8 if i % 2 == 0 else 2.0)
-        y = SCALE_Y0 + i * 25.4 / 16
-        rects.append(tick(W / 2, length, y))
-        if i % 16 == 0:
-            label, h = (str(i // 16), 3.0) if i else ("in", 2.4)
-            texts += text_contours(label, h, W / 2 - 7.6, y)
+    # Scales: millimetres on the left edge, sixteenths of an inch on the right.
+    num = 7.2                               # distance of the numbers from the edge
+    rects = scale_marks(-W / 2, SCALE_Y0, 1.0, 190, 1, ((10, 2.0), (5, 1.1)))
+    rects += scale_marks(W / 2, SCALE_Y0, 25.4 / 16, 120, 1,
+                         ((16, 2.0), (8, 1.5), (4, 1.0)))
+    texts = []
+    for cm in range(0, 20):
+        label, h = (str(cm), TEXT_H) if cm else ("cm", 3.0)
+        texts += text_contours(label, h, -W / 2 + num, SCALE_Y0 + cm * 10)
+    for inch in range(0, 8):
+        label, h = (str(inch), TEXT_H) if inch else ("in", 3.0)
+        texts += text_contours(label, h, W / 2 - num, SCALE_Y0 + inch * 25.4)
     body -= engraving(rects, texts, T)
     return body
 
@@ -173,7 +199,7 @@ def make_slider():
     head = CrossSection([rounded_outline(-W / 2, W / 2, 0, HEAD_L, (0, 0, 4, HEAD_R))])
     slider = head.extrude(RAIL_H)
 
-    hb, ht, c = RAIL_BASE / 2, RAIL_TOP / 2, 0.3
+    hb, ht, c = RAIL_BASE / 2, RAIL_TOP / 2, 0.5
     zt = BASE_H + (hb - ht)
     profile = [(-hb + c, 0), (hb - c, 0), (hb, c), (hb, BASE_H), (ht, zt), (ht, RAIL_H),
                (-ht, RAIL_H), (-ht, zt), (-hb, BASE_H), (-hb, c)]
@@ -188,12 +214,10 @@ def make_slider():
                        (-RAIL_L - 1, 1.6)], -GROOVE_W / 2, GROOVE_W / 2)
 
     # Caliper scale on the rail, read where the rail leaves the body.
-    rects, texts = [], []
-    for i in range(1, int(TRAVEL) + 1):
-        length = 5.5 if i % 10 == 0 else 4.2 if i % 5 == 0 else 2.8
-        rects.append(tick(ht, length, -i))
-        if i % 10 == 0:
-            texts += text_contours(str(i // 10), 3.0, ht - 8.6, -i)
+    rects = scale_marks(ht, 0.0, 1.0, int(TRAVEL), -1, ((10, 2.0), (5, 1.1)))
+    texts = []
+    for cm in range(1, int(TRAVEL) // 10 + 1):
+        texts += text_contours(str(cm), TEXT_H, ht - 7.2, -cm * 10)
     # Thumb grooves on the head.
     for y in (8.0, 11.5, 15.0, 18.5):
         rects.append(rect(-9.0, 12.0, y - 0.6, y + 0.6))
@@ -225,7 +249,10 @@ def assembled(slider, opening, seated=True):
 if __name__ == "__main__":
     out = Path(sys.argv[1] if len(sys.argv) > 1 else Path(__file__).parent)
     body, slider = make_body(), make_slider()
-    for name, m in (("sturdy_ruler_body.stl", body), ("sturdy_ruler_slider.stl", slider)):
+    test_body = body ^ box(-W, W, LB - 62, LB + 1, -1, T + 1)
+    test_rail = slider ^ box(-W, W, -RAIL_L - 1, -RAIL_L + 68, -1, T + 1)
+    for name, m in (("sturdy_ruler_body.stl", body), ("sturdy_ruler_slider.stl", slider),
+                    ("fit_test_body.stl", test_body), ("fit_test_rail.stl", test_rail)):
         write_stl(m, out / name)
         bb = m.bounding_box()
         size = [round(bb[i + 3] - bb[i], 2) for i in range(3)]
